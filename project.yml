@@ -1,0 +1,29 @@
+name: CutFlow
+options:
+  bundleIdPrefix: com.sammy
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  CutFlow:
+    type: application
+    platform: iOS
+    sources: [CutFlow]
+    scheme: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sammy.cutflow
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_FILE: Config/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: CutFlow
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "CutFlow needs your videos so it can edit them."
+        INFOPLIST_KEY_NSCameraUsageDescription: "CutFlow uses the camera to film your split-screen takes."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "CutFlow records sound with your takes."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "CutFlow saves your finished edits to Photos."
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
