@@ -271,6 +271,7 @@ final class ProjectStore: ObservableObject {
 
 enum Prefs {
     static let smoothCuts = "smoothCuts"
+    static let cutReaches = "cutReaches"
     static let length = "defaultLength"
     static let pace = "defaultPace"
     static let room = "defaultRoom"
@@ -283,6 +284,7 @@ enum Prefs {
     static func register() {
         UserDefaults.standard.register(defaults: [
             smoothCuts: true,
+            cutReaches: true,
             length: 30.0,
             pace: Pace.fast.rawValue,
             room: RoomLevel.normal.rawValue,

@@ -231,6 +231,7 @@ final class EditorModel: ObservableObject {
             pace: pace,
             hookFirst: hookFirst,
             smoothCuts: Prefs.d.bool(forKey: Prefs.smoothCuts),
+            cutReaches: Prefs.d.bool(forKey: Prefs.cutReaches),
             removeSilences: removeSilences,
             room: room,
             reroll: reroll

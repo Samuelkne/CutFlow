@@ -7,6 +7,7 @@ struct SettingsView: View {
     @ObservedObject var split: SplitModel
 
     @AppStorage(Prefs.smoothCuts) private var smoothCuts = true
+    @AppStorage(Prefs.cutReaches) private var cutReaches = true
     @AppStorage(Prefs.length) private var length = 30.0
     @AppStorage(Prefs.pace) private var pace = Pace.fast.rawValue
     @AppStorage(Prefs.room) private var room = RoomLevel.normal.rawValue
@@ -26,6 +27,10 @@ struct SettingsView: View {
                     Group {
                     Row(icon: "wand.and.rays", title: "Smooth cuts", detail: "Quick blend at every cut, no jump cuts") {
                         Toggle("Smooth cuts", isOn: $smoothCuts).labelsHidden().tint(RC.blue)
+                    }
+                    RowDivider()
+                    Row(icon: "hand.raised", title: "Cut camera reaches", detail: "Trims where you reach to start or stop") {
+                        Toggle("Cut camera reaches", isOn: $cutReaches).labelsHidden().tint(RC.blue)
                     }
                     RowDivider()
                     Row(icon: "waveform.path", title: "Remove silences", detail: "Default for new edits") {

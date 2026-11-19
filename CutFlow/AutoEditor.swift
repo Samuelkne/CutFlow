@@ -74,6 +74,7 @@ struct EditSettings {
     let pace: Pace
     let hookFirst: Bool
     let smoothCuts: Bool
+    var cutReaches = true
     let removeSilences: Bool
     let room: RoomLevel
     let reroll: Bool
@@ -242,6 +243,98 @@ enum AutoEditor {
         }
     }
 
+    // MARK: Reaching for the phone
+
+    /// Finds the start and end of a clip where you reach for the phone to tap record or stop.
+    /// A hand over the lens makes the picture look completely different from the rest of the clip,
+    /// far more than talking or gesturing does. We compare the first and last couple of seconds with a
+    /// normal frame and cut past the part where the hand is in shot.
+    /// The very first and last split second (the tap itself) are always trimmed.
+    static func reachTrim(url: URL, duration: Double) async -> (start: Double, end: Double) {
+        let plainStart = min(0.15, duration / 4)
+        let plainEnd = max(plainStart, duration - min(0.25, duration / 4))
+        guard duration > 2 else { return (plainStart, plainEnd) }
+
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 96, height: 96)
+        let tolerance = CMTime(value: 1, timescale: 30)
+        gen.requestedTimeToleranceBefore = tolerance
+        gen.requestedTimeToleranceAfter = tolerance
+
+        func frame(_ t: Double) async -> [UInt8]? {
+            let time = CMTime(seconds: min(max(0, t), duration - 0.05), preferredTimescale: 600)
+            guard let img = try? await gen.image(at: time).image else { return nil }
+            return grayPixels(img)
+        }
+        func distances(_ times: [Double], to ref: [UInt8]) async -> [Double] {
+            var out: [Double] = []
+            for t in times {
+                if let f = await frame(t), f.count == ref.count { out.append(frameChange(f, ref)) } else { out.append(0) }
+            }
+            return out
+        }
+
+        let step = 0.1
+        let window = min(2.5, duration / 3)
+
+        // How different normal frames look from each other, measured in the middle of the clip
+        let mid = duration / 2
+        guard let midRef = await frame(mid + window / 2) else { return (plainStart, plainEnd) }
+        let baseline = await distances(Array(stride(from: mid - window / 2, to: mid + window / 2, by: step * 2)), to: midRef).sorted()
+        let typical = baseline.isEmpty ? 0.02 : baseline[min(baseline.count - 1, Int(Double(baseline.count) * 0.75))]
+        let threshold = max(0.05, typical * 2.5)
+
+        var start = plainStart
+        let startTimes = Array(stride(from: 0.0, through: window, by: step))
+        if startTimes.count > 2, let ref = await frame(window) {
+            let d = await distances(startTimes, to: ref)
+            if d[0] > threshold || d[1] > threshold {          // hand in shot right at the start
+                var i = 0
+                while i + 1 < d.count && (d[i] > threshold || d[i + 1] > threshold) { i += 1 }
+                start = max(start, startTimes[i] + 0.3)         // a moment after it's gone
+            }
+        }
+
+        var end = plainEnd
+        let endTimes = Array(stride(from: duration - window, through: duration - 0.05, by: step))
+        if endTimes.count > 2, let ref = await frame(endTimes[0]) {
+            let d = await distances(endTimes, to: ref)
+            let n = d.count
+            if d[n - 1] > threshold || d[n - 2] > threshold {  // hand in shot right at the end
+                var j = n - 1
+                while j - 1 >= 0 && (d[j] > threshold || d[j - 1] > threshold) { j -= 1 }
+                end = min(end, endTimes[j] - 0.15)              // a moment before it comes in
+            }
+        }
+
+        // If that would leave almost nothing, it wasn't a reach: keep the plain trim
+        if end - start < 0.6 { return (plainStart, plainEnd) }
+        return (start, end)
+    }
+
+    /// A tiny 40x40 grayscale copy of a frame, for comparing frames quickly.
+    static func grayPixels(_ image: CGImage) -> [UInt8]? {
+        let w = 40, h = 40
+        var pixels = [UInt8](repeating: 0, count: w * h)
+        let ok = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            ctx.interpolationQuality = .low
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return ok ? pixels : nil
+    }
+
+    /// Average change between two frames, 0 (same) to 1 (completely different).
+    static func frameChange(_ a: [UInt8], _ b: [UInt8]) -> Double {
+        var total = 0
+        for i in a.indices { total += abs(Int(a[i]) - Int(b[i])) }
+        return Double(total) / Double(a.count) / 255
+    }
+
     /// When someone is talking in a take, with short pauses merged (used by the script prompter).
     static func voiceRegions(url: URL, room: RoomLevel = .normal) async -> [ClosedRange<Double>] {
         let asset = AVURLAsset(url: url)
@@ -271,10 +364,20 @@ enum AutoEditor {
         for (i, clip) in clips.enumerated() {
             let usable = max(0, clip.duration - 0.1)
             guard usable > 0.3 else { continue }
+            // Cut where you reach for the phone to start or stop recording
+            var lo = 0.0, hi = usable
+            if settings.cutReaches {
+                let reach = await reachTrim(url: clip.url, duration: clip.duration)
+                lo = reach.start
+                hi = min(usable, reach.end)
+            }
             let energy = await loudness(url: clip.url)
             for r in speechRegions(energy: energy, usable: usable, settings: settings) {
+                let st = max(r.start, lo)
+                let en = min(r.end, hi)
+                guard en - st >= 0.2 else { continue }
                 let jitter = settings.reroll ? Double.random(in: 0...0.03) : 0
-                body.append(Segment(clipIndex: i, start: r.start, duration: r.end - r.start, score: r.score + jitter))
+                body.append(Segment(clipIndex: i, start: st, duration: en - st, score: r.score + jitter))
             }
         }
         guard !body.isEmpty else { return [] }
@@ -291,14 +394,20 @@ enum AutoEditor {
 
         // Fit the length: drop the weakest parts (never the very first line).
         let budget = settings.target - (hook?.duration ?? 0)
+        // Smooth cuts add a little room around each part (about one blend each), so count that in
+        let perPart = settings.smoothCuts ? 0.15 : 0
+        func length(_ total: Double) -> Double { total + Double(body.count + (hook == nil ? 0 : 1)) * perPart }
         var total = body.reduce(0) { $0 + $1.duration }
-        while total > budget, body.count > 1 {
+        while length(total) > budget, body.count > 1 {
             guard let weakest = body.enumerated().dropFirst().min(by: { $0.element.score < $1.element.score }) else { break }
+            let over = length(total) - budget
+            // Dropping a long part to fix a small overrun would leave the edit well short: trim the end instead
+            if weakest.element.duration - perPart > over + 2 { break }
             total -= weakest.element.duration
             body.remove(at: weakest.offset)
         }
-        if total > budget, var last = body.last {
-            last.duration = max(0.3, last.duration - (total - budget))
+        if length(total) > budget, var last = body.last {
+            last.duration = max(0.3, last.duration - (length(total) - budget))
             body[body.count - 1] = last
         }
 
@@ -406,6 +515,13 @@ enum AutoEditor {
             placed.append(piece)
         }
 
+        // Drop tracks that ended up empty (one-piece edits, clips with no sound): some iPhones
+        // refuse to export a composition with an empty track in it.
+        for track in videoTracks + audioTracks where track.segments.isEmpty {
+            composition.removeTrack(track)
+        }
+        let liveAudio = audioTracks.filter { !$0.segments.isEmpty }
+
         // Video: a plain stretch for each piece, and a crossfade wherever two pieces overlap
         var instructions: [AVMutableVideoCompositionInstruction] = []
         for (i, piece) in placed.enumerated() {
@@ -451,7 +567,9 @@ enum AutoEditor {
             }
         }
         let audioMix = AVMutableAudioMix()
-        audioMix.inputParameters = params
+        audioMix.inputParameters = params.enumerated()
+            .filter { liveAudio.contains(audioTracks[$0.offset]) }
+            .map(\.element)
 
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
